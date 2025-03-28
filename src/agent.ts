@@ -43,17 +43,22 @@ import {formatDateBasedOnType, formatDateRange} from "./utils/date-tools";
 import {fixMarkdown} from "./tools/md-fixer";
 import {repairUnknownChars} from "./tools/broken-ch-fixer";
 
+// 休眠函数，暂停执行指定的毫秒数
 async function sleep(ms: number) {
   const seconds = Math.ceil(ms / 1000);
   console.log(`Waiting ${seconds}s...`);
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// 从知识项构建消息对数组
 function BuildMsgsFromKnowledge(knowledge: KnowledgeItem[]): CoreMessage[] {
+  // 从知识构建用户-助手对消息
   // build user, assistant pair messages from knowledge
   const messages: CoreMessage[] = [];
   knowledge.forEach(k => {
+    // 添加用户消息（问题）
     messages.push({role: 'user', content: k.question.trim()});
+    // 构建助手消息（回答）
     const aMsg = `
 ${k.updated && (k.type === 'url' || k.type === 'side-info') ? `
 <answer-datetime>
@@ -70,15 +75,19 @@ ${k.references[0]}
 
 ${k.answer}
       `.trim();
+    // 添加助手消息，并移除多余的换行
     messages.push({role: 'assistant', content: removeExtraLineBreaks(aMsg)});
   });
   return messages;
 }
 
+// 组合消息，包括知识、消息历史和当前问题
 function composeMsgs(messages: CoreMessage[], knowledge: KnowledgeItem[], question: string, finalAnswerPIP?: string[]) {
+  // 知识始终放在前面，后面是真实的用户-助手交互
   // knowledge always put to front, followed by real u-a interaction
   const msgs = [...BuildMsgsFromKnowledge(knowledge), ...messages];
 
+  // 构建用户内容，包括问题和可能的回答要求
   const userContent = `
 ${question}
 
@@ -95,11 +104,12 @@ ${p}
 </answer-requirements>` : ''}
     `.trim();
 
+  // 添加新的用户消息，并移除多余的换行
   msgs.push({role: 'user', content: removeExtraLineBreaks(userContent)});
   return msgs;
 }
 
-
+// 获取提示，构建系统提示内容
 function getPrompt(
   context?: string[],
   allQuestions?: string[],
@@ -116,6 +126,7 @@ function getPrompt(
   const sections: string[] = [];
   const actionSections: string[] = [];
 
+  // 添加头部部分（标头）
   // Add header section
   sections.push(`Current date: ${new Date().toUTCString()}
 
@@ -124,6 +135,7 @@ Using your best knowledge, conversation with the user and lessons learned, answe
 `);
 
 
+  // 如果存在，添加上下文部分
   // Add context section if exists
   if (context?.length) {
     sections.push(`
@@ -135,14 +147,18 @@ ${context.join('\n')}
 `);
   }
 
+  // 构建动作部分
   // Build actions section
 
+  // 处理URL列表，选择并排序前20个URL
   const urlList = sortSelectURLs(allURLs || [], 20);
   if (allowRead && urlList.length > 0) {
+    // 构建URL列表字符串
     const urlListStr = urlList
       .map((item, idx) => `  - [idx=${idx + 1}] [weight=${item.score.toFixed(2)}] "${item.url}": "${item.merged.slice(0, 50)}"`)
       .join('\n')
 
+    // 添加访问动作部分
     actionSections.push(`
 <action-visit>
 - Crawl and read full content from URLs, you can get the fulltext, last updated datetime etc of any URL.  
@@ -157,7 +173,7 @@ ${urlListStr}
 
 
   if (allowSearch) {
-
+    // 添加搜索动作部分
     actionSections.push(`
 <action-search>
 - Use web search to find relevant information
@@ -174,6 +190,7 @@ ${allKeywords.join('\n')}
   }
 
   if (allowAnswer) {
+    // 添加回答动作部分
     actionSections.push(`
 <action-answer>
 - For greetings, casual conversation, general knowledge questions answer directly without references.
@@ -187,6 +204,7 @@ ${allKeywords.join('\n')}
   }
 
   if (beastMode) {
+    // 添加野兽模式回答动作部分（强制回答模式）
     actionSections.push(`
 <action-answer>
 🔥 ENGAGE MAXIMUM FORCE! ABSOLUTE PRIORITY OVERRIDE! 🔥

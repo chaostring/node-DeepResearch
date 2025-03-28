@@ -14,57 +14,72 @@ import {ActionTracker} from "./utils/action-tracker";
 import {ObjectGeneratorSafe} from "./utils/safe-generator";
 import {jsonSchema} from "ai"; // or another converter library
 
+// 创建Express应用实例
 const app = express();
 
+// 从命令行参数获取可选的身份验证密钥
 // Get secret from command line args for optional authentication
 const secret = process.argv.find(arg => arg.startsWith('--secret='))?.split('=')[1];
 
 
+// 启用跨域资源共享
 app.use(cors());
+// 配置JSON请求体解析器，限制请求体大小为10MB
 app.use(express.json({
   limit: '10mb'
 }));
 
+// 添加健康检查端点，用于Docker容器验证
 // Add health check endpoint for Docker container verification
 app.get('/health', (req, res) => {
   res.json({status: 'ok'});
 });
 
+// 自然流式输出文本的异步生成器函数
 async function* streamTextNaturally(text: string, streamingState: StreamingState) {
+  // 将文本分割成保留CJK字符、URL和常规单词的块
   // Split text into chunks that preserve CJK characters, URLs, and regular words
   const chunks = splitTextIntoChunks(text);
-  let burstMode = false;
-  let consecutiveShortItems = 0;
+  let burstMode = false;  // 爆发模式标志
+  let consecutiveShortItems = 0;  // 连续短项计数
 
   for (const chunk of chunks) {
+    // 如果不再处于流式传输状态，一次性输出剩余内容并返回
     if (!streamingState.currentlyStreaming) {
       yield chunks.slice(chunks.indexOf(chunk)).join('');
       return;
     }
 
+    // 计算当前块的延迟时间
     const delay = calculateDelay(chunk, burstMode);
 
+    // 处理连续的短项
     // Handle consecutive short items
     if (getEffectiveLength(chunk) <= 3 && chunk.trim().length > 0) {
       consecutiveShortItems++;
+      // 如果连续3个或更多短项，进入爆发模式
       if (consecutiveShortItems >= 3) {
         burstMode = true;
       }
     } else {
+      // 重置连续短项计数和爆发模式
       consecutiveShortItems = 0;
       burstMode = false;
     }
 
+    // 等待一段时间，模拟真实打字速度
     await new Promise(resolve => setTimeout(resolve, delay));
-    yield chunk;
+    yield chunk;  // 输出当前块
   }
 }
 
+// 将文本分割成更小的块，保留特定特性
 function splitTextIntoChunks(text: string): string[] {
   const chunks: string[] = [];
   let currentChunk = '';
-  let inURL = false;
+  let inURL = false;  // URL标志
 
+  // 辅助函数，将当前块添加到结果中
   const pushCurrentChunk = () => {
     if (currentChunk) {
       chunks.push(currentChunk);
@@ -76,7 +91,7 @@ function splitTextIntoChunks(text: string): string[] {
     const char = text[i];
     const nextChar = text[i + 1] || '';
 
-    // URL detection
+    // URL检测
     if (char === 'h' && text.slice(i, i + 8).match(/https?:\/\//)) {
       pushCurrentChunk();
       inURL = true;
@@ -84,7 +99,7 @@ function splitTextIntoChunks(text: string): string[] {
 
     if (inURL) {
       currentChunk += char;
-      // End of URL detection (whitespace or certain punctuation)
+      // URL结束检测（空白或特定标点）
       if (/[\s\])}"']/.test(nextChar) || i === text.length - 1) {
         pushCurrentChunk();
         inURL = false;
@@ -92,87 +107,91 @@ function splitTextIntoChunks(text: string): string[] {
       continue;
     }
 
-    // CJK character detection (including kana and hangul)
+    // CJK字符检测（包括假名和韩文）
     if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(char)) {
       pushCurrentChunk();
       chunks.push(char);
       continue;
     }
 
-    // Whitespace handling
+    // 空白处理
     if (/\s/.test(char)) {
       pushCurrentChunk();
       chunks.push(char);
       continue;
     }
 
-    // Regular word building
+    // 常规单词构建
     currentChunk += char;
 
-    // Break on punctuation
+    // 在标点符号处断开
     if (/[.!?,;:]/.test(nextChar)) {
       pushCurrentChunk();
     }
   }
 
+  // 确保最后的块也被添加
   pushCurrentChunk();
   return chunks.filter(chunk => chunk !== '');
 }
 
+// 计算块输出的延迟时间
 function calculateDelay(chunk: string, burstMode: boolean): number {
   const trimmedChunk = chunk.trim();
 
-  // Handle whitespace
+  // 处理空白
   if (trimmedChunk.length === 0) {
-    return Math.random() * 20 + 10;
+    return Math.random() * 20 + 10;  // 10-30ms的随机延迟
   }
 
-  // Special handling for URLs
+  // URL特殊处理
   if (chunk.match(/^https?:\/\//)) {
-    return Math.random() * 50 + 10; // Slower typing for URLs
+    return Math.random() * 50 + 10;  // URL输出较慢，10-60ms的随机延迟
   }
 
-  // Special handling for CJK characters
+  // CJK字符特殊处理
   if (/^[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]$/.test(chunk)) {
-    return Math.random() * 25 + 10; // Longer delay for individual CJK characters
+    return Math.random() * 25 + 10;  // CJK字符单个输出较慢，10-35ms的随机延迟
   }
 
-  // Base delay calculation
+  // 基本延迟计算
   let baseDelay;
   if (burstMode) {
-    baseDelay = Math.random() * 30 + 10;
+    baseDelay = Math.random() * 30 + 10;  // 爆发模式下10-40ms的随机延迟
   } else {
     const effectiveLength = getEffectiveLength(chunk);
     const perCharacterDelay = Math.max(10, 40 - effectiveLength * 2);
     baseDelay = Math.random() * perCharacterDelay + 10;
   }
 
-  // Add variance based on chunk characteristics
+  // 根据块特性添加变化
   if (/[A-Z]/.test(chunk[0])) {
-    baseDelay += Math.random() * 20 + 10;
+    baseDelay += Math.random() * 20 + 10;  // 大写字母开头增加10-30ms的随机延迟
   }
 
   if (/[^a-zA-Z\s]/.test(chunk)) {
-    baseDelay += Math.random() * 30 + 10;
+    baseDelay += Math.random() * 30 + 10;  // 非字母或空格字符增加10-40ms的随机延迟
   }
 
-  // Add pauses for punctuation
+  // 标点符号的停顿
   if (/[.!?]$/.test(chunk)) {
-    baseDelay += Math.random() * 200 + 10;
+    baseDelay += Math.random() * 200 + 10;  // 句末标点增加10-210ms的随机延迟
   } else if (/[,;:]$/.test(chunk)) {
-    baseDelay += Math.random() * 100 + 10;
+    baseDelay += Math.random() * 100 + 10;  // 句中标点增加10-110ms的随机延迟
   }
 
   return baseDelay;
 }
 
+// 获取块的有效长度（考虑到CJK字符的宽度）
 function getEffectiveLength(chunk: string): number {
-  // Count CJK characters as 2 units
+  // 将CJK字符计为2个单位
   const cjkCount = (chunk.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
   const regularCount = chunk.length - cjkCount;
   return regularCount + (cjkCount * 2);
 }
 
+// 辅助函数，立即输出剩余内容
 // Helper function to emit remaining content immediately
 async function emitRemainingContent(
   res: Response,
@@ -183,6 +202,7 @@ async function emitRemainingContent(
 ) {
   if (!content) return;
 
+  // 创建并发送包含剩余内容的响应块
   const chunk: ChatCompletionChunk = {
     id: requestId,
     object: 'chat.completion.chunk',
